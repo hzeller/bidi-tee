@@ -9,16 +9,11 @@ The output in `/tmp/output.log` will contain the whole sequence in a single
 file but terminal color coded.
 
  * parent:stdin->child: red bold
- * child:stdout->parent: blue inverse
- * child:stderr->parent: blue
+ * child:stdout->parent: blue bold
+ * child:stderr->parent: regular
 
-Color can't be shown with github markdown, so this looks bo
-<pre>
-<b>Request from parent to child</b>
-Response coming back from the child
-different color stderr from child
-<b>Another parent child communication</b>
-.. and its response
-</pre>
+Useful to debug communication with a subprocess, here an example snippet
+from a clangd session, observing what is going on between emacs and clangd
+talking LSP (red: emacs talking to clangd, blue: clangd answering, green: clangd stderr output).
 
-Useful to debug communication with a subprocess.
+![](./img/bidi-tee.png)

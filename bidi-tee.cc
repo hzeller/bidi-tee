@@ -18,9 +18,9 @@ static int usage(const char *progname) {
 
 // Things to wrap communication around, so that we have a colored
 // output.
-static constexpr char kParentChildPrefix[] = "\033[1;31m";
-static constexpr char kChildParentPrefixStdout[] = "\033[7;34m";
-static constexpr char kChildParentPrefixStderr[] = "\033[0;34m";
+static constexpr char kParentChildPrefix[] = "\033[1;31m";   // bold red
+static constexpr char kChildParentPrefixStdout[] = "\033[1;34m";  // bold blue
+static constexpr char kChildParentPrefixStderr[] = "";
 static constexpr char kSuffix[] = "\033[0m";
 static constexpr char kEOFMarker[] = "<<EOF>>";
 
@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  char copy_buf[1024];
+  char copy_buf[8192];
 
   // Wrapping the coloring additions in iovec, so that we can
   // writev() them in one go.
