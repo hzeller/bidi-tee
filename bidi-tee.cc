@@ -9,6 +9,11 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
+#include <time.h>
+#include <cstring>
+
+#include "block-header.h"
 
 static int usage(const char *progname) {
   fprintf(stderr, "Usage: %s <output> -- "
@@ -16,19 +21,14 @@ static int usage(const char *progname) {
   return 2;
 }
 
-// Things to wrap communication around, so that we have a colored
-// output.
-static constexpr char kParentChildPrefix[] = "\033[1;31m";   // bold red
-static constexpr char kChildParentPrefixStdout[] = "\033[1;34m";  // bold blue
-static constexpr char kChildParentPrefixStderr[] = "";
-static constexpr char kSuffix[] = "\033[0m";
-static constexpr char kEOFMarker[] = "<<EOF>>";
+static int64_t GetTimeNanoseconds() {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return ((uint64_t)t.tv_sec) * 1000000000 + t.tv_nsec;
+}
 
-static constexpr int kReadSide = 0;
-static constexpr int kWriteSide = 1;
-
-static void reliable_write(int fd, char *buffer, size_t size) {
-  while (size) {
+static void reliable_write(int fd, char *buffer, ssize_t size) {
+  while (size > 0) {
     int w = write(fd, buffer, size);
     if (w < 0) return;  // Uhm.
     size -= w;
@@ -36,20 +36,44 @@ static void reliable_write(int fd, char *buffer, size_t size) {
   }
 }
 
-static bool CopyFromTo(char *buf, size_t buf_size,
-                       int from, int to,
-                       iovec *coloring, int tee_fd) {
-  int r = read(from, buf, buf_size);
-  reliable_write(to, buf, r);
-  if (r <= 0) {
-    strcpy(buf, kEOFMarker);
-    r = strlen(buf);
+class ChannelCopier {
+public:
+  ChannelCopier(int channel, int read_fd, int write_fd)
+    : read_fd_(read_fd), write_fd_(write_fd) {
+    memset(&header_, 0x00, sizeof(header_));
+    header_.channel = channel;
+    block_[0].iov_base = &header_;
+    block_[0].iov_len = sizeof(header_);
   }
-  coloring[1].iov_len = r;
-  writev(tee_fd, coloring, 3);
 
-  return r > 0;
-}
+  int readfd() const { return read_fd_; }
+  bool valid() const { return !header_.channel_closed; }
+  void AddToFdset(fd_set *s) const {
+    if (valid()) {
+      FD_SET(read_fd_, s);
+    } else {
+      FD_CLR(read_fd_, s);
+    }
+  }
+
+  void CopyUsingBuffer(int64_t timestamp, int tee_fd,
+                       char *buf, size_t size) {
+    int r = read(read_fd_, buf, size);
+    block_[1].iov_base = buf;
+    block_[1].iov_len = r > 0 ? r : 0;
+    reliable_write(write_fd_, buf, r);
+    header_.channel_closed = (r <= 0);
+    header_.timestamp_ns = timestamp;
+    header_.block_size = block_[1].iov_len;
+    writev(tee_fd, block_, 2);
+  }
+
+private:
+  const int read_fd_;
+  const int write_fd_;
+  BlockHeader header_;
+  iovec block_[2];
+};
 
 int main(int argc, char *argv[]) {
   if (argc < 3) {
@@ -64,6 +88,9 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Expected -- before name of program to start\n");
     return 1;
   }
+
+  static constexpr int kReadSide = 0;
+  static constexpr int kWriteSide = 1;
 
   const int start_of_program = 3;
 
@@ -118,70 +145,29 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  char copy_buf[8192];
+  char copy_buf[65535];
 
-  // Wrapping the coloring additions in iovec, so that we can
-  // writev() them in one go.
-  iovec parent_child_coloring_stdin[3] = {
-    { (void*)kParentChildPrefix, strlen(kParentChildPrefix) },
-    { copy_buf, 0},  // buffer already known, len to be filled later
-    { (void*)kSuffix, strlen(kSuffix) },
-  };
-  iovec child_parent_coloring_stdout[3] = {
-    { (void*)kChildParentPrefixStdout, strlen(kChildParentPrefixStdout) },
-    { copy_buf, 0},  // buffer already known, len to be filled later
-    { (void*)kSuffix, strlen(kSuffix) },
-  };
-  iovec child_parent_coloring_stderr[3] = {
-    { (void*)kChildParentPrefixStderr, strlen(kChildParentPrefixStderr) },
-    { copy_buf, 0},  // buffer already known, len to be filled later
-    { (void*)kSuffix, strlen(kSuffix) },
-  };
+  ChannelCopier stdin_cp(0, STDIN_FILENO, parent_to_child_stdin[kWriteSide]);
+  ChannelCopier stdout_cp(1, child_to_parent_stdout[kReadSide], STDOUT_FILENO);
+  ChannelCopier stderr_cp(2, child_to_parent_stderr[kReadSide], STDERR_FILENO);
 
   fd_set rd_fds;
   FD_ZERO(&rd_fds);
 
-  const int max_fd = std::max(child_to_parent_stdout[kReadSide],
-                              child_to_parent_stderr[kReadSide]);
-  bool parent_input_open = true;
-  bool child_output_stdout_open = true;
-  bool child_output_stderr_open = true;
-  while (parent_input_open ||
-         child_output_stdout_open || child_output_stderr_open) {
-    if (parent_input_open)
-      FD_SET(STDIN_FILENO, &rd_fds);
-    if (child_output_stdout_open)
-      FD_SET(child_to_parent_stdout[kReadSide], &rd_fds);
-    if (child_output_stderr_open)
-      FD_SET(child_to_parent_stderr[kReadSide], &rd_fds);
+  const int max_fd = std::max(stdout_cp.readfd(), stderr_cp.readfd());
+
+  while (stdin_cp.valid() || stdout_cp.valid() || stderr_cp.valid()) {
+    for (const ChannelCopier &channel : { stdin_cp, stdout_cp, stderr_cp }) {
+      channel.AddToFdset(&rd_fds);
+    }
 
     int sret = select(max_fd+1, &rd_fds, NULL, NULL, NULL);
     if (sret < 0) return 0;
 
-    if (FD_ISSET(STDIN_FILENO, &rd_fds)) {
-      if (!CopyFromTo(copy_buf, sizeof(copy_buf),
-                      STDIN_FILENO, parent_to_child_stdin[kWriteSide],
-                      parent_child_coloring_stdin, outfd)) {
-        parent_input_open = false;
-        FD_CLR(STDIN_FILENO, &rd_fds);
-      }
-    }
-
-    if (FD_ISSET(child_to_parent_stdout[kReadSide], &rd_fds)) {
-      if (!CopyFromTo(copy_buf, sizeof(copy_buf),
-                      child_to_parent_stdout[kReadSide], STDOUT_FILENO,
-                      child_parent_coloring_stdout, outfd)) {
-        child_output_stdout_open = false;
-        FD_CLR(child_to_parent_stdout[kReadSide], &rd_fds);
-      }
-    }
-
-    if (FD_ISSET(child_to_parent_stderr[kReadSide], &rd_fds)) {
-      if (!CopyFromTo(copy_buf, sizeof(copy_buf),
-                      child_to_parent_stderr[kReadSide], STDERR_FILENO,
-                      child_parent_coloring_stderr, outfd)) {
-        child_output_stderr_open = false;
-        FD_CLR(child_to_parent_stderr[kReadSide], &rd_fds);
+    const int64_t timestamp = GetTimeNanoseconds();
+    for (ChannelCopier *channel : { &stdin_cp, &stdout_cp, &stderr_cp }) {
+      if (FD_ISSET(channel->readfd(), &rd_fds)) {
+        channel->CopyUsingBuffer(timestamp, outfd, copy_buf, sizeof(copy_buf));
       }
     }
   }
