@@ -21,10 +21,16 @@ static int usage(const char *progname) {
   return 2;
 }
 
-static int64_t GetTimeNanoseconds() {
+using timestamp_t = int64_t;
+
+static timestamp_t GetTimeNanoseconds() {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
-  return ((uint64_t)t.tv_sec) * 1000000000 + t.tv_nsec;
+  // since CLOCK_MONOTONIC is not based on start of epoch (but typically
+  // since machine was booted), let's rebase that. First time we're called,
+  // we determine the time offset.
+  static timestamp_t global_second_offset = time(nullptr) - t.tv_sec;
+  return (global_second_offset + t.tv_sec) * 1000000000 + t.tv_nsec;
 }
 
 static void reliable_write(int fd, char *buffer, ssize_t size) {
@@ -56,7 +62,7 @@ public:
     }
   }
 
-  void CopyUsingBuffer(int64_t timestamp, int tee_fd,
+  void CopyUsingBuffer(timestamp_t timestamp, int tee_fd,
                        char *buf, size_t size) {
     int r = read(read_fd_, buf, size);
     block_[1].iov_base = buf;
@@ -164,7 +170,7 @@ int main(int argc, char *argv[]) {
     int sret = select(max_fd+1, &rd_fds, NULL, NULL, NULL);
     if (sret < 0) return 0;
 
-    const int64_t timestamp = GetTimeNanoseconds();
+    const timestamp_t timestamp = GetTimeNanoseconds();
     for (ChannelCopier *channel : { &stdin_cp, &stdout_cp, &stderr_cp }) {
       if (FD_ISSET(channel->readfd(), &rd_fds)) {
         channel->CopyUsingBuffer(timestamp, outfd, copy_buf, sizeof(copy_buf));

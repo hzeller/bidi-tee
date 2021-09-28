@@ -21,20 +21,25 @@ program, which allows to include timestamps, only selected channels...
 Usage: bidi-tee-print [<options>] <bidi-tee-logfile>
 -h            : this help
 -c            : toggle print in color
--t            : Print timestamp
--r            : Print timestamp relative to last print
+-ts           : Print timestamp since start of recording.
+-ta           : Print timestamps as absolute timestamps.
+-td           : Print delta timestamps relative to last print
 -s <select-channel> : comma-separated list of channels to print, e.g. 0,2 prints stdin and stderr
 -o <filename> : Output to filename
 ```
 
 ### Timestamps
-Timestamps can be printed with the `-t` option, optionally with `-r` for
-'relative timestamps'. Relative timestamps can be useful for latency debugging.
+Timestamps can be printed with the `-t` option that is qualified with one of three letters:
+`-ts` prints times since the start of the recording, `-td` prints relative time between outputs and `-ta`
+prints absolute timestamps.
 
-Timestamp print since start    | Relative timestamp
--------------------------------|------------------------------
-![](img/absolute-time.png)     |![](img/relative-time.png)
+Start Timestamp  `-ts`   | Delta timestamp `-td`
+-------------------------|-----------------------
+![](img/start-time.png)  |![](img/delta-time.png)
 
+The `-ta` absolute timestamp prints the full timestamp with date and time
+
+![](img/absolute-time.png)
 
 ### Example
 

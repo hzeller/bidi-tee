@@ -1,6 +1,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <set>
 
+
 #include "block-header.h"
 
 static int usage(const char *progname, int retval) {
@@ -17,8 +19,9 @@ static int usage(const char *progname, int retval) {
   fprintf(stderr,
           "-h            : this help\n"
           "-c            : toggle print in color\n"
-          "-t            : Print timestamp\n"
-          "-r            : Print timestamp relative to last print\n"
+          "-ts           : Print timestamp since start of recording.\n"
+          "-ta           : Print timestamps as absolute timestamps.\n"
+          "-td           : Print delta timestamps relative to last print\n"
           "-s <select-channel> : comma-separated list of channels to print, e.g. 0,2 prints stdin and stderr\n"
           "-o <filename> : Output to filename\n");
   return retval;
@@ -62,16 +65,23 @@ int main(int argc, char *argv[]) {
 
   FILE *out = stdout;
   std::set<int> selected_channels;
-  bool print_timestamp = false;
-  bool print_relative_time = false;
+  enum class TSPrint { kNone, kStartFile, kDelta, kAbsolute };
+  TSPrint print_timestamp = TSPrint::kNone;
   bool print_colored = true;
 
   int opt;
-  while ((opt = getopt(argc, argv, "htrco:s:")) != -1) {
+  while ((opt = getopt(argc, argv, "ht:co:s:")) != -1) {
     switch (opt) {
     case 'h': return usage(argv[0], 0);
-    case 't': print_timestamp = !print_timestamp; break;
-    case 'r': print_relative_time = !print_relative_time; break;
+    case 't': switch (optarg[0]) {
+      case 's': print_timestamp = TSPrint::kStartFile; break;
+      case 'a': print_timestamp = TSPrint::kAbsolute; break;
+      case 'd': print_timestamp = TSPrint::kDelta; break;
+      default:
+        fprintf(stderr, "-t requires a letter to qualify timestamp printing\n");
+        return usage(argv[0], 2);
+      }
+      break;
     case 'c': print_colored = !print_colored; break;
     case 'o': out = fopen(optarg, "wb"); break;
     case 's': {
@@ -79,6 +89,7 @@ int main(int argc, char *argv[]) {
       int count = sscanf(optarg, "%d,%d,%d,%d", &s[0], &s[1], &s[2], &s[3]);
       for (int i = 0; i < count; ++i) selected_channels.insert(s[i]);
     }
+      // ΤODO: case 'f' for 'follow'
     }
   }
 
@@ -103,26 +114,48 @@ int main(int argc, char *argv[]) {
   BlockHeader header;
   int64_t start_timestamp = -1;
   bool last_was_newline = true;
+  char delta_timestamp_prefix = ' ';
 
   while (reliable_read(in_fd, &header, sizeof(header))) {
+    if (start_timestamp < 0) start_timestamp = header.timestamp_ns;
+
     if (!reliable_read(in_fd, copy_buf, header.block_size)) {
       fprintf(stderr, "Unexpected end of file reading %d bytes\n",
               header.block_size);
       return 1;
     }
+
     if (selected_channels.count(header.channel) == 0)
       continue;  // Not interested in printing this channel. Skip.
 
-    if (print_timestamp) {
-      // To make sure that timestamp starts at the beginning of the line
-      // add a newline unless it already was naturally in the last buffer.
-      if (!last_was_newline) fprintf(out, "\n");
-      const bool print_plus = print_relative_time && start_timestamp > 0;
-      if (start_timestamp < 0) start_timestamp = header.timestamp_ns;
-      const int64_t since_start = header.timestamp_ns - start_timestamp;
-      fprintf(out, "%s%5ld.%06ldms: ", print_plus ? "+" : " ",
+    if (header.channel_closed)
+      continue;
+
+    if (print_timestamp != TSPrint::kNone && !last_was_newline)
+      fprintf(out, "\n");  // make sure timestamps start in a new line.
+
+    const int64_t since_start = header.timestamp_ns - start_timestamp;
+    switch (print_timestamp) {
+    case TSPrint::kNone: break;
+    case TSPrint::kStartFile:
+      fprintf(out, "%6ld.%06ldms: ",
               since_start / 1000000, since_start % 1000000);
-      if (print_relative_time) start_timestamp = header.timestamp_ns;
+      break;
+    case TSPrint::kDelta:
+      fprintf(out, "%c%5ld.%06ldms: ", delta_timestamp_prefix,
+              since_start / 1000000, since_start % 1000000);
+      delta_timestamp_prefix = '+';
+      start_timestamp = header.timestamp_ns;
+      break;
+    case TSPrint::kAbsolute: {
+      const time_t seconds = header.timestamp_ns / 1000000000;
+      struct tm prdate;
+      localtime_r(&seconds, &prdate);
+      char buffer[32];
+      strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &prdate);
+      fprintf(out, "[%s.%09ld]: ", buffer, header.timestamp_ns % 1000000000);
+      break;
+    }
     }
 
     if (print_colored) {
