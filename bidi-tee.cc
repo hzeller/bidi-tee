@@ -1,6 +1,7 @@
 #include <fcntl.h>
 #include <sys/select.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -26,11 +27,18 @@ using timestamp_t = int64_t;
 static timestamp_t GetTimeNanoseconds() {
   struct timespec t;
   clock_gettime(CLOCK_MONOTONIC, &t);
+  const timestamp_t uncorrected =  (int64_t)t.tv_sec * 1000000000 + t.tv_nsec;
+
   // since CLOCK_MONOTONIC is not based on start of epoch (but typically
-  // since machine was booted), let's rebase that. First time we're called,
-  // we determine the time offset.
-  static timestamp_t global_second_offset = time(nullptr) - t.tv_sec;
-  return (global_second_offset + t.tv_sec) * 1000000000 + t.tv_nsec;
+  // since machine was booted), let's rebase that.
+  // First time we're called, determine the offset to the actual time. The
+  // absolute time we only have in microsecond resolution, but good enough.
+  static timestamp_t monotone_offset = [uncorrected]() -> timestamp_t {
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    return (tv.tv_sec * 1000000000 + tv.tv_usec * 1000) - uncorrected;
+  }();
+  return uncorrected + monotone_offset;
 }
 
 static void reliable_write(int fd, char *buffer, ssize_t size) {
