@@ -29,7 +29,7 @@ Usage: bidi-tee-print [<options>] <bidi-tee-logfile>
 
 ### Timestamps
 Timestamps can be printed with the `-t` option, optionally with `-r` for
-'relative timestamps'. Relative timestamps can be useful for latency.
+'relative timestamps'. Relative timestamps can be useful for latency debugging.
 
 Timestamp print since start    | Relative timestamp
 -------------------------------|------------------------------

@@ -16,7 +16,7 @@
 #include "block-header.h"
 
 static int usage(const char *progname) {
-  fprintf(stderr, "Usage: %s <output> -- "
+  fprintf(stderr, "Usage: %s <output-logfile> -- "
           "</path/to/program> <program-options...>\n", progname);
   return 2;
 }
