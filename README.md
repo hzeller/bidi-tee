@@ -1,11 +1,12 @@
 Bi-directional tee
 ==================
 
-Bi-directional tee. Essentially observing bi-directional stdin/stdout/stderr
+Bi-directional tee. Observing bi-directional stdin/stdout/stderr
 chatter while invoking a client program and while forwarding as usual like
 a bi-directional pipe, but also writing all of them into a binary file
 containing all channels and timestamps that then can be looked at with the
 bidi-tee-print program.
+So it behaves like the Unix [tee] utility, but in both directions.
 
 Useful to debug communication with a subprocess communicating via stdin/stdout.
 
@@ -13,14 +14,15 @@ Useful to debug communication with a subprocess communicating via stdin/stdout.
  bidi-tee /tmp/output.log -- other-program parameters to other program
 ```
 
-The output in `/tmp/output.log` can then be printed using the `bidi-tee-print`
-program, which allows to include timestamps, only selected channels...
+The output (in this example `/tmp/output.log`) can then be printed using the
+`bidi-tee-print` program, which allows to include timestamps and choose
+which channels to print.
 
 
 ```
 Usage: bidi-tee-print [<options>] <bidi-tee-logfile>
 -h            : this help
--c            : toggle print in color
+-c            : toggle print in color (default: on)
 -ts           : Print timestamp since start of recording.
 -ta           : Print timestamps as absolute timestamps.
 -td           : Print delta timestamps relative to last print
@@ -49,3 +51,5 @@ between emacs and clangd talking Language Server Protocol to each other.
 green: clangd stderr output).
 
 ![](./img/bidi-tee.png)
+
+[tee]: https://man7.org/linux/man-pages/man1/tee.1.html

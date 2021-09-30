@@ -18,7 +18,7 @@ static int usage(const char *progname, int retval) {
   fprintf(stderr, "Usage: %s [<options>] <bidi-tee-logfile>\n", progname);
   fprintf(stderr,
           "-h            : this help\n"
-          "-c            : toggle print in color\n"
+          "-c            : toggle print in color (default: on)\n"
           "-ts           : Print timestamp since start of recording.\n"
           "-ta           : Print timestamps as absolute timestamps.\n"
           "-td           : Print delta timestamps relative to last print\n"
