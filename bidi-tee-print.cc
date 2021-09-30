@@ -27,17 +27,6 @@ static int usage(const char *progname, int retval) {
   return retval;
 }
 
-static bool reliable_read(int fd, void *buf, ssize_t desired_size) {
-  char *read_buf = (char*)buf;
-  while (desired_size > 0) {
-    int r = read(fd, read_buf, desired_size);
-    if (r <= 0) return false;
-    desired_size -= r;
-    read_buf += r;
-  }
-  return true;
-}
-
 // Things to wrap communication around, so that we have a colored
 // output.
 static constexpr const char *kColors[3] = {
@@ -103,9 +92,8 @@ int main(int argc, char *argv[]) {
   }
 
   const char *in_filename = argv[optind];
-
-  const int in_fd = open(in_filename, O_RDONLY);
-  if (in_fd < 0) {
+  FILE *instream = fopen(in_filename, "r");
+  if (!instream) {
     perror("Couldn't open input");
     return 1;
   }
@@ -116,10 +104,10 @@ int main(int argc, char *argv[]) {
   bool last_was_newline = true;
   char delta_timestamp_prefix = ' ';
 
-  while (reliable_read(in_fd, &header, sizeof(header))) {
+  while (fread(&header, sizeof(header), 1, instream)) {
     if (start_timestamp < 0) start_timestamp = header.timestamp_ns;
 
-    if (!reliable_read(in_fd, copy_buf, header.block_size)) {
+    if (!fread(copy_buf, header.block_size, 1, instream)) {
       fprintf(stderr, "Unexpected end of file reading %d bytes\n",
               header.block_size);
       return 1;
