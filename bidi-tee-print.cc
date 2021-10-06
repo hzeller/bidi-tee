@@ -106,6 +106,7 @@ int main(int argc, char *argv[]) {
 
   while (fread(&header, sizeof(header), 1, instream)) {
     if (start_timestamp < 0) start_timestamp = header.timestamp_ns;
+    if (header.block_size == 0) continue;
 
     if (!fread(copy_buf, header.block_size, 1, instream)) {
       fprintf(stderr, "Unexpected end of file reading %d bytes\n",
