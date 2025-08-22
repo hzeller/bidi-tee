@@ -11,18 +11,20 @@ So it behaves like the Unix [tee] utility, but in both directions.
 Useful to debug communication with a subprocess communicating via stdin/stdout.
 
 ```
- bidi-tee /tmp/output.log -- other-program parameters to other program
+ bidi-tee /tmp/output.log -- /path/to/other-program parameters to other program
 ```
 
 The output (in this example `/tmp/output.log`) can then be printed using the
-`bidi-tee-print` program, which allows to include timestamps and choose
-which channels to print.
+`bidi-tee-print` program, which can print the channels color-encoded,
+allows to include timestamps and choose which channels to print.
 
 
 ```
 Usage: bidi-tee-print [<options>] <bidi-tee-logfile>
 -h            : this help
 -c            : toggle print in color (default: on)
+-e            : toggle c-escape output (default: off)
+-n            : if -e: do start new line after '\n' (default: on)
 -ts           : Print timestamp since start of recording.
 -ta           : Print timestamps as absolute timestamps.
 -td           : Print delta timestamps relative to last print
