@@ -7,7 +7,8 @@ struct BlockHeader {
   int64_t timestamp_ns;
   uint64_t channel : 4;
   uint64_t channel_closed : 1;
-  uint64_t reserved : 43;
+  uint64_t exit_code: 8;
+  uint64_t reserved : 35;
   uint64_t block_size : 16;
 };
 static_assert(sizeof(BlockHeader) == 16, "Block header unexpected size");

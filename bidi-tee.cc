@@ -1,9 +1,12 @@
+#include <cstdlib>
 #include <fcntl.h>
+#include <signal.h> // NOLINT(modernize-deprecated-headers)
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/uio.h>
-#include <time.h>  // NOLINT(modernize-deprecated-headers) ctime not complete
+#include <sys/wait.h>
+#include <time.h> // NOLINT(modernize-deprecated-headers) ctime not complete
 #include <unistd.h>
 
 #include <cerrno>
@@ -20,6 +23,9 @@ static int usage(const char *progname) {
           "</path/to/program> <program-options...>\n", progname);
   return 2;
 }
+
+static volatile sig_atomic_t sigchild_called = false;
+static void sigchld_handler(int) { sigchild_called = true; }
 
 using timestamp_t = int64_t;
 
@@ -71,7 +77,7 @@ public:
 
   // Copy input to output and forward close() once input is closed.
   // Copied data is also written with timestamp and content to "tee_fd"
-  void CopyUsingBuffer(timestamp_t timestamp, int tee_fd,
+  bool CopyUsingBuffer(timestamp_t timestamp, int tee_fd,
                        char *scratch, size_t size_available) {
     const int r = read(read_fd_, scratch, size_available);
     block_[1].iov_base = scratch;
@@ -87,10 +93,7 @@ public:
     header_.block_size = block_[1].iov_len;
     const ssize_t expected_len = block_[0].iov_len + block_[1].iov_len;
     const ssize_t written = writev(tee_fd, block_, 2);
-    if (written != expected_len) {
-      fprintf(stderr, "Failure writing to tee file; written %zd != %zd bytes\n",
-              written, expected_len);
-    }
+    return written == expected_len;
   }
 
 private:
@@ -132,6 +135,9 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  // Make sure we notice when our child exits
+  signal(SIGCHLD, sigchld_handler);
+
   const int pid = fork();
   if (pid < 0) {
     perror("fork");
@@ -165,8 +171,8 @@ int main(int argc, char *argv[]) {
   close(child_to_parent_stdout[kWriteSide]);
   close(child_to_parent_stderr[kWriteSide]);
 
-  const int outfd = open(out_filename, O_WRONLY|O_CREAT|O_TRUNC, 0644);
-  if (outfd < 0) {
+  const int tee_fd = open(out_filename, O_WRONLY|O_CREAT|O_TRUNC, 0644);
+  if (tee_fd < 0) {
     perror("Couldn't open output file");
     return 1;
   }
@@ -182,19 +188,34 @@ int main(int argc, char *argv[]) {
 
   const int max_fd = std::max(stdout_cp.readfd(), stderr_cp.readfd());
 
-  while (stdin_cp.valid() || stdout_cp.valid() || stderr_cp.valid()) {
+  while (!sigchild_called &&
+         (stdin_cp.valid() || stdout_cp.valid() || stderr_cp.valid())) {
     for (const ChannelCopier &channel : { stdin_cp, stdout_cp, stderr_cp }) {
       channel.AddToFdset(&rd_fds);
     }
 
     const int sret = select(max_fd+1, &rd_fds, nullptr, nullptr, nullptr);
-    if (sret < 0) return 0;
+    if (sret < 0) break;
 
     const timestamp_t timestamp = GetTimeNanoseconds();
-    for (ChannelCopier *channel : { &stdin_cp, &stdout_cp, &stderr_cp }) {
+    for (ChannelCopier *channel : {&stdin_cp, &stdout_cp, &stderr_cp}) {
       if (FD_ISSET(channel->readfd(), &rd_fds)) {
-        channel->CopyUsingBuffer(timestamp, outfd, copy_buf, sizeof(copy_buf));
+        channel->CopyUsingBuffer(timestamp, tee_fd, copy_buf, sizeof(copy_buf));
       }
     }
   }
+
+  // Collect and report exit status.
+  int wstatus = 0;
+  waitpid(pid, &wstatus, 0);
+  BlockHeader exit_block{};
+  exit_block.timestamp_ns = GetTimeNanoseconds();
+  exit_block.channel = 15;
+  exit_block.exit_code = WEXITSTATUS(wstatus);
+  if (write(tee_fd, &exit_block, sizeof(exit_block)) < 0) {
+    return 120;
+  }
+
+  close(tee_fd);
+  return exit_block.exit_code;
 }

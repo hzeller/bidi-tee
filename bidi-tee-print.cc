@@ -87,6 +87,7 @@ static const char *PrintChannel(int channel) {
   case 0: return "->";  // stdin
   case 1: return "<-";  // stdout
   case 2: return "<=";  // stderr
+  case 0x0f: return "EXIT";
   default: return "??";
   }
 }
@@ -157,7 +158,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (selected_channels.empty()) {
-    selected_channels = {0, 1, 2};
+    selected_channels = {0, 1, 2, 15};
   }
 
   const char *in_filename = argv[optind];
@@ -172,6 +173,10 @@ int main(int argc, char *argv[]) {
   int64_t start_timestamp = -1;
   bool last_was_newline = true;
   char delta_timestamp_prefix = ' ';
+
+  // Printing messages such as channel closed or exit status.
+  // Currently essentially when we have timestamp printing on.
+  const bool print_out_of_band = print_timestamp != TSPrint::kNone;
 
   int exit_code = EXIT_SUCCESS;
   while (fread(&header, sizeof(header), 1, instream)) {
@@ -221,8 +226,16 @@ int main(int argc, char *argv[]) {
     }
 
     if (header.channel_closed) {
-      if (print_timestamp != TSPrint::kNone) {
+      if (print_out_of_band) {
         fprintf(out, "<channel %u closed>\n", header.channel);
+        last_was_newline = true;
+      }
+      continue;
+    }
+
+    if (header.channel == 15) {
+      if (print_out_of_band) {
+        fprintf(out, "Exit code %d\n", header.exit_code);
         last_was_newline = true;
       }
       continue;
