@@ -1,4 +1,5 @@
-CXXFLAGS=-W -Wall -Wextra -O3
+CXXFLAGS=-W -Wall -Wextra -pedantic -O3 -D_POSIX_C_SOURCE=199309L
+
 PREFIX=/usr/local
 
 all: bidi-tee bidi-tee-print
