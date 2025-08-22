@@ -1,18 +1,17 @@
 #include <fcntl.h>
 #include <sys/select.h>
-#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <time.h>  // NOLINT(modernize-deprecated-headers) ctime not complete
 #include <unistd.h>
 
-#include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <cstdint>
-#include <time.h>
-#include <cstring>
+
+#include <algorithm>
 
 #include "block-header.h"
 
@@ -33,7 +32,7 @@ static timestamp_t GetTimeNanoseconds() {
   // since machine was booted), let's rebase that.
   // First time we're called, determine the offset to the actual time. The
   // absolute time we only have in microsecond resolution, but good enough.
-  static timestamp_t monotone_offset = [uncorrected]() -> timestamp_t {
+  static const timestamp_t monotone_offset = [uncorrected]() -> timestamp_t {
     struct timeval tv;
     gettimeofday(&tv, nullptr);
     return (tv.tv_sec * 1000000000 + tv.tv_usec * 1000) - uncorrected;
@@ -43,7 +42,7 @@ static timestamp_t GetTimeNanoseconds() {
 
 static void reliable_write(int fd, char *buffer, ssize_t size) {
   while (size > 0) {
-    int w = write(fd, buffer, size);
+    const ssize_t w = write(fd, buffer, size);
     if (w < 0) return;  // Uhm.
     size -= w;
     buffer += w;
@@ -70,16 +69,28 @@ public:
     }
   }
 
+  // Copy input to output and forward close() once input is closed.
+  // Copied data is also written with timestamp and content to "tee_fd"
   void CopyUsingBuffer(timestamp_t timestamp, int tee_fd,
-                       char *buf, size_t size) {
-    int r = read(read_fd_, buf, size);
-    block_[1].iov_base = buf;
+                       char *scratch, size_t size_available) {
+    const int r = read(read_fd_, scratch, size_available);
+    block_[1].iov_base = scratch;
     block_[1].iov_len = r > 0 ? r : 0;
-    reliable_write(write_fd_, buf, r);
-    header_.channel_closed = (r <= 0);
+    const bool input_closed = (r <= 0);
+    if (!input_closed) {
+      reliable_write(write_fd_, scratch, r);
+    } else {
+      close(write_fd_);
+    }
+    header_.channel_closed = input_closed;
     header_.timestamp_ns = timestamp;
     header_.block_size = block_[1].iov_len;
-    writev(tee_fd, block_, 2);
+    const ssize_t expected_len = block_[0].iov_len + block_[1].iov_len;
+    const ssize_t written = writev(tee_fd, block_, 2);
+    if (written != expected_len) {
+      fprintf(stderr, "Failure writing to tee file; written %zd != %zd bytes\n",
+              written, expected_len);
+    }
   }
 
 private:
@@ -100,12 +111,13 @@ int main(int argc, char *argv[]) {
     // Right now, we don't actually have options yet, but to be ready
     // for options, let's enforce -- already now.
     fprintf(stderr, "Expected -- before name of program to start\n");
-    return 1;
+    return usage(argv[0]);
   }
 
   static constexpr int kReadSide = 0;
   static constexpr int kWriteSide = 1;
 
+  // After `--`. Since we don't take args yet, always 3rd arg currently.
   const int start_of_program = 3;
 
   // Pipes in two directions
@@ -139,7 +151,7 @@ int main(int argc, char *argv[]) {
     execv(argv[start_of_program], argv + start_of_program);
 
     // Uh, still here ? exec failed...
-    fprintf(stderr, "Failed to execute %s: %s\n",
+    fprintf(stderr, "Failed to execute %s: %s (note, need absolute path to binary)\n",
             argv[start_of_program], strerror(errno));
     close(parent_to_child_stdin[kReadSide]);
     close(child_to_parent_stdout[kWriteSide]);
@@ -175,7 +187,7 @@ int main(int argc, char *argv[]) {
       channel.AddToFdset(&rd_fds);
     }
 
-    int sret = select(max_fd+1, &rd_fds, NULL, NULL, NULL);
+    const int sret = select(max_fd+1, &rd_fds, nullptr, nullptr, nullptr);
     if (sret < 0) return 0;
 
     const timestamp_t timestamp = GetTimeNanoseconds();
